@@ -233,8 +233,9 @@ A: Cap by RPC rate limits (often ~20 workers); more wallets = waves.
 
 ## Companion (Indonesian, shorter)
 
-A simpler Indonesian version lives on Notion (portfolio hub):  
-→ *Notion URL filled after publish*
+A simpler Indonesian version lives on Notion (portfolio hub):
+
+→ https://app.notion.com/p/Skill-Mint-NFT-di-Hermes-ringkas-3a6dddfb96cd81008895ce80b5518ee7
 
 ---
 
