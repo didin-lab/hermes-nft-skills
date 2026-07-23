@@ -1,298 +1,250 @@
 # Hermes NFT Mint Skills
 
-A comprehensive collection of **Hermes Agent skills** for automating NFT minting operations on EVM chains — from single-wallet fast mints to 50+ wallet parallel broadcasts, stage-open sniping, contract security analysis, and whitelist campaign automation.
+A practical English guide to **Hermes Agent skills for minting NFTs on EVM chains** — from single-wallet fast mints to **50+ wallet parallel** broadcasts, **stage-open sniping**, contract security, eligibility checks, and whitelist campaigns.
 
-> Built for the Hermes Agent ecosystem. These are **agent skills** (SKILL.md files) that teach an LLM agent to execute NFT operations with precision, not standalone scripts.
+> These are **agent skills** (`SKILL.md` playbooks). They teach an LLM agent *how* to mint safely and fast — not a one-click GUI.
+
+**Repo:** https://github.com/didin-lab/hermes-nft-skills
 
 ---
 
-## 🧩 Skills Overview
+## What this is
 
-| # | Skill | Purpose | Key Capability |
+When a freemint / SeaDrop / allowlist phase opens, speed and discipline matter:
+
+| Need | Skill |
+|---|---|
+| Understand contract + mint path | `nft-mint` / `nft-fast-mint` |
+| Hit many wallets at once | `nft-parallel-mint` |
+| Fire the second a stage opens | `nft-stage-open-snipe` |
+| Check fleet ETH + X cookies | `nft-mint-preflight` |
+| Who is on GTD/FCFS before open | `opensea-eligibility-checker` |
+| Skip OpenSea API rate limits | `seadrop-direct-mint` / calldata template |
+| Don’t get rugged | `contract-analysis` / `contract-scanner` |
+| RPC doesn’t die mid-run | `cron-multi-rpc-fallback` |
+
+---
+
+## Skills overview
+
+| # | Skill | Purpose |
+|---|---|---|
+| 1 | `nft-mint` | End-to-end lifecycle: probe → fund → mint → transfer |
+| 2 | `nft-fast-mint` | Single-wallet speed (few RPC calls, ABI cache) |
+| 3 | `nft-parallel-mint` | Concurrent mint across many wallets (per-wallet nonces) |
+| 4 | `nft-stage-open-snipe` | Pre-warm → poll → fire at T0 |
+| 5 | `nft-mint-preflight` | Fleet health: balances + account readiness |
+| 6 | `nft-toolkit` | SIWE, calldata builder, GraphQL, multi-RPC helpers |
+| 7 | `contract-analysis` | Pre-mint bytecode / drain / fee-change checks |
+| 8 | `nft-wl-social-campaign` | Social-gated WL flows (API reverse + multi-account) |
+| 9 | `nft-wl-submission` | Form/API allowlist submission at scale |
+| 10 | `cron-multi-rpc-fallback` | Multi-RPC connect + self-heal for cron mints |
+| 11 | `evm-eip1559-fee-optimizer` | EIP-1559 fee caps and priority fee discovery |
+| 12 | `opensea-eligibility-checker` | SIWE + GraphQL signed-presale eligibility |
+| 13 | `seadrop-direct-mint` | Direct SeaDrop calldata mint (bypass API) |
+
+Related portfolio piece: [opensea-eligibility-check](https://github.com/didin-lab/opensea-eligibility-check).
+
+---
+
+## Features (what you get)
+
+### 1) Contract intelligence first
+- Detect EIP-1167 proxy vs implementation
+- Resolve ABI (explorer / 4byte / recent mint txs)
+- Discover mint function order: `freeMint` → `claim` → `mint` → SeaDrop `mintPublic` → `quoteMint`
+
+### 2) SeaDrop-aware path
+OpenSea drops often **mint on SeaDrop, not the token contract**:
+
+```text
+Token (proxy) → ERC721SeaDrop impl
+              → SeaDrop v2 router mintPublic(nft, feeRecipient, minter, qty)
+```
+
+- Prefer signed-presale eligibility via **SIWE + GraphQL** before open
+- Live stage probe: `build_mint_tx` → tx payload vs **422** (not listed) vs **409** (not started)
+- Hard 429 on mint-builder → switch to **calldata template** + direct broadcast
+
+### 3) Parallel multi-wallet mint
+- One wallet = one nonce stream (no shared-nonce races)
+- Funding WCore → wallets is **serial**; mints wallet → contract are **parallel**
+- Auto-skip empty wallets; gas abort mid-batch
+
+### 4) Stage-open snipe (3 phases)
+1. **Cron early** (T−2–3 min) — load script, connect RPC  
+2. **Pre-warm** — ABI, price, nonces, gas, pre-built tx dicts  
+3. **Fire** — tight-poll until stage open → sign+send all
+
+### 5) Strict gas discipline
+Typical operator ceiling (example ops setup):
+
+- Hard **base fee cap** (abort if above user max)
+- Two-layer abort: **pre-flight** + **per-wallet** mid-run
+- Never silently submit at higher gas when user said “more = cancel”
+
+### 6) RPC resilience
+- Primary private RPC + public fallbacks
+- `connect_rpc()` / `ensure_w3()` self-heal mid-cron
+- Mandatory for timed snipes
+
+---
+
+## Why use Hermes skills for minting
+
+| Approach | Pros | Cons |
+|---|---|---|
+| Manual MetaMask | Simple | Slow, one wallet, easy to miss T0 |
+| Random bot scripts | Fast-looking | Broken nonces, no gas abort, rug blind |
+| **Hermes skill stack** | Probe + eligibility + parallel + snipe + RPC heal | Needs agent/ops setup |
+
+Benefits:
+
+- **Coverage** — many wallets in one open window  
+- **Latency** — pre-warm so T0 isn’t cold-start  
+- **Safety** — paid mint ask-first, gas abort, contract scan  
+- **Honesty** — report real tx hashes; never invent success  
+
+---
+
+## When to use which skill
+
+| Situation | Load |
+|---|---|
+| “Mint 1 freemint this contract” | `nft-fast-mint` |
+| “Mint all funded wallets” | `nft-parallel-mint` |
+| “Auto mint the second FCFS opens” | `nft-stage-open-snipe` + multi-RPC |
+| “Who is on GTD?” | `opensea-eligibility-checker` |
+| “OpenSea mint API 429 forever” | `seadrop-direct-mint` / template |
+| “Is this contract shady?” | `contract-analysis` |
+| “Are wallets funded / X cookies alive?” | `nft-mint-preflight` |
+
+---
+
+## Mint flow (high level)
+
+```text
+1. get_drop / SIWE eligibility   → who & when
+2. contract probe + security     → how & is it safe
+3. preflight balances            → who can pay gas/price
+4. pre-warm (ABI, nonces, gas)   → ready before T0
+5. fire (parallel or snipe)      → broadcast
+6. poll receipts                 → report N/M + hashes
+```
+
+### SeaDrop calldata template (concept)
+
+When API mint-builder is unusable:
+
+```text
+selector mintPublic
+  + nftContract (32b)
+  + feeRecipient (32b)
+  + minterIfNotPayer (32b)  ← swap per wallet
+  + quantity (32b)
+```
+
+Broadcast to SeaDrop router; do not call `mintSeaDrop` on the token (reverts `OnlyAllowedSeaDrop`).
+
+---
+
+## Wallet fleets (typical layout)
+
+| Fleet | Count | Source | Role |
 |---|---|---|---|
-| 1 | `nft-mint` | End-to-end NFT lifecycle | ERC-721/721A/SeaDrop, contract probing, mint discovery |
-| 2 | `nft-fast-mint` | Single-wallet speed mint | Minimal RPC calls (4-6), ABI caching, pattern shortcuts |
-| 3 | `nft-parallel-mint` | 50+ wallet batch mint | ThreadPoolExecutor, per-wallet nonces, gas-abort, pre-flight |
-| 4 | `nft-stage-open-snipe` | Phase-open sniping | Pre-warm → tight-poll → fire at T0, sub-second broadcast |
-| 5 | `nft-mint-preflight` | Multi-fleet health check | 50-wallet ETH scan + 8-account X token validation |
-| 6 | `nft-toolkit` | NFT infrastructure | SIWE auth, calldata builder, GraphQL client, multi-RPC |
-| 7 | `contract-analysis` | Pre-mint security | Bytecode scanning, selfdestruct/drain/fee-change detection |
-| 8 | `nft-wl-social-campaign` | WL campaign automation | Reverse-engineer WL APIs, multi-account pipeline, spin/gacha |
-| 9 | `nft-wl-submission` | WL form submission | Google Forms, Supabase, X-engagement gates, 50+ wallets |
-| 10 | `cron-multi-rpc-fallback` | RPC resilience | Multi-RPC with self-healing, fallback chains, cron-safe |
-| 11 | `evm-eip1559-fee-optimizer` | Gas optimization | EIP-1559 fee estimation, priority fee discovery, hard caps |
+| WCore | 1 | `~/wallets/wcore.key` | Operator / funding |
+| Hunt wallets | w1–w50 | `wallets_pk.txt` / `wallets.json` | Parallel mint |
+| X-linked | w51–w57 + wcore | identity map | WL social + mint |
+
+**Always derive address from PK** before operating. Auto-skip insufficient balance.
 
 ---
 
-## 📊 Gas Rules
-
-The user operates with a **strict gas ceiling**:
-
-- **Hard cap**: 0.2–0.3 gwei max base fee. Anything above = **ABORT**.
-- **Priority fee**: 0.01–0.05 gwei minimum for mempool inclusion.
-- **Two-layer abort**: pre-flight (before any tx) + per-wallet (mid-batch spike).
-- **Propagation**: abort flag must be explicit — never silently skip.
+## Gas rules (operator standard)
 
 ```python
 # Pre-flight
-if base_fee > w3.to_wei(max_gas_gwei, "gwei"):
-    sys.exit("GAS ABORT: base_fee above cap")
+if base_fee > max_gas_gwei:
+    abort("GAS ABORT")
 
-# Per-wallet
-if base_fee > max_gas_wei:
+# Per-wallet mid-batch
+if base_fee > max_gas_gwei:
     return {"abort": True, "err": "GAS_ABORT"}
 ```
 
----
-
-## 🔍 Contract Detection Flow
-
-The `nft-mint` and `nft-fast-mint` skills share a unified contract probing pipeline:
-
-### 1. Bytecode Analysis
-```
-eth_getCode → detect proxy pattern (EIP-1167: 45 bytes = minimal proxy)
-```
-
-### 2. ABI Resolution
-```
-Blockscout API (free) → extract ABI from implementation address
-Fallback: 4byte.directory for selector lookup
-Last resort: scan recent mint TXs for calldata
-```
-
-### 3. Mint Function Discovery (Priority Order)
-```
-1. freeMint() / freeMint(uint256)        — zero-cost
-2. claim(uint256) / claim(address,uint256)
-3. mint(uint256) / mint()                 — ERC-721A standard
-4. mintPublic(address,address,address,uint256) — SeaDrop v2
-5. quoteMint(address,uint256)             — Tessera free-then-paid
-```
-
-### 4. Price Detection
-```python
-# Try estimateGas with value=0
-gas = contract.functions.mint(qty).estimate_gas({"from": addr, "value": 0})
-# → price = 0 (free mint!)
-
-# If revert: parse IncorrectPayment error (0x0d35e921)
-# → extract actual price from error data
-```
+- Abort flag must be **explicit** (never silent skip)
+- Priority fee too low → mempool drop (tune with fee optimizer skill)
 
 ---
 
-## 🚀 SeaDrop v2 Flow
+## Pitfalls
 
-The most common pattern for OpenSea drops:
-
-```
-Token Contract (EIP-1167 proxy)
-  └─ Implementation (ERC-721SeaDrop)
-       └─ SeaDrop v2 Router: 0x00005EA00Ac477B1030CE78506496e8C2dE24bf5
-            └─ mintPublic(nftContract, feeRecipient, minter, qty)
-```
-
-**Calldata template** (bypass OpenSea API rate limits):
-```
-0x161ac21f                          ← selector
-  + nftContract (32 bytes, left-padded)
-  + feeRecipient (32 bytes)
-  + minterIfNotPayer (32 bytes)     ← byte 80: swap per wallet
-  + quantity (32 bytes, left-padded)
-```
-
-**Error signatures:**
-- `0x13da22f2` — `NotActive(current, start, end)` — expected before drop
-- `0x0d35e921` — `IncorrectPayment(expected, actual)` — price discovery
+1. **Paid mint** — always confirm with user if `value > 0`  
+2. **Public ≠ WL** — public eligibility is not a competitive win  
+3. **`build_mint_tx` 409** — stage not started; not “not listed”  
+4. **`build_mint_tx` 422** — not on *active* allowlist  
+5. **Stage schedule drift** — re-query at fire time  
+6. **Shared nonce** — never parallelize one sender’s funding txs  
+7. **Single RPC** — single point of failure on snipes  
+8. **EIP-1167** — 45-byte code = proxy; mint via SeaDrop / impl path  
+9. **web3.py v7** — `signed.raw_transaction` (snake_case)  
+10. **Never invent** tx hashes / “success” without receipt  
 
 ---
 
-## ⚡ Parallel Mint Architecture
+## Compare: mint styles
 
-```
-                    ┌──────────────┐
-                    │  Pre-flight  │
-                    │  ABI + Gas   │
-                    └──────┬───────┘
-                           │
-              ┌────────────┼────────────┐
-              │            │            │
-         ┌────▼────┐  ┌────▼────┐  ┌────▼────┐
-         │ Wallet 1 │  │ Wallet 2 │  │ Wallet N │
-         │ nonce=5  │  │ nonce=3  │  │ nonce=7  │
-         │ sign+send│  │ sign+send│  │ sign+send│
-         └────┬─────┘  └────┬─────┘  └────┬─────┘
-              │            │            │
-              └────────────┼────────────┘
-                           │
-                    ┌──────▼───────┐
-                    │  Receipts    │
-                    │  poll (240s) │
-                    └──────┬───────┘
-                           │
-                    ┌──────▼───────┐
-                    │  Report:     │
-                    │  N/M success │
-                    └──────────────┘
-```
-
-**Key constraints:**
-- Max 20 concurrent workers (RPC rate limit)
-- 10-20s delay before polling receipts (null = normal)
-- Never share nonce state between parallel sends
-- Auto-skip wallets with insufficient balance
-
----
-
-## 🎯 Stage-Open Snipe (3-Phase)
-
-The `nft-stage-open-snipe` skill implements a timing-critical pattern:
-
-### Phase 1: Cron (T-3min)
-```
-Schedule cron 2-3 min BEFORE stage time, not at it.
-Ensures script is loaded, RPC connected, ABI cached before T0.
-```
-
-### Phase 2: Pre-Warm (T-3min → T-5s)
-```
-1. connect_rpc() with fallback chain
-2. Cache ABI + detect mint function
-3. Detect price
-4. Pre-fetch nonces (pending)
-5. Pre-compute gas
-6. Pre-build tx dicts
-7. Balance pre-check
-8. Gas abort check
-```
-
-### Phase 3: Fire (T0)
-```
-Tight-poll every 1.5s → stage_open → re-read base_fee → sign+send all
-```
-
----
-
-## 🛡️ Contract Security (Pre-Mint)
-
-Before sending any transaction to an unfamiliar contract:
-
-```
-1. Bytecode scan → detect proxy, selfdestruct, delegatecall
-2. Blockscout verification → is source verified?
-3. Ownership check → renounced? multi-sig? EOA?
-4. Drain patterns → sweepToken(), rescueETH(), withdrawAll()
-5. Fee-change → can mint price change mid-drop?
-6. Supply cap → totalSupply() vs maxSupply()
-```
-
----
-
-## 📝 Whitelist Campaign Pipeline
-
-The `nft-wl-social-campaign` skill handles the full WL flow:
-
-```
-1. Reverse-engineer WL API
-   ├─ /start → /step → /submit-tweet → /spin
-   └─ Detect verification: real tweet required? API trust only?
-
-2. Multi-account pipeline
-   ├─ Social steps (API trust — no real X actions)
-   ├─ Real tweet post (if backend verifies URL)
-   ├─ Real follow (if user chooses "campur" mode)
-   └─ Spin (5% win rate, 12h cooldown)
-
-3. Daily cron retry
-   ├─ Reuse existing tweets
-   ├─ Idempotent: check cooldown before spin
-   └─ Report per-account: WIN/LOSE/COOLDOWN
-```
-
----
-
-## 🔧 Wallet Infrastructure
-
-| Fleet | Count | Source | Purpose |
+| Style | Wallets | Latency | Best for |
 |---|---|---|---|
-| WCore | 1 | `~/wallets/wcore.key` | Operator wallet, funding source |
-| w1–w50 | 50 | `wallets.json` | Hunt/mint wallets |
-| w51–w57 | 7 | `wallets_pk.txt` (lines 51–57) | X account wallets |
-| X accounts | 8 | `~/.x_creds_*` | Cookie-based X auth |
-
-**Balance thresholds:**
-- `> 0.00005 ETH` — funded
-- `> 0.0001 ETH` — mint-ready (1 paid mint + gas)
-- `> 0.0005 ETH` — 3-mint ready
+| Fast mint | 1 | Medium | Probe + single claim |
+| Parallel | N | Medium | Freemint coverage |
+| Stage snipe | N | Lowest at T0 | Timed FCFS/public open |
+| Manual | 1 | High | Learning only |
 
 ---
 
-## 📦 File Structure
+## FAQ
 
-```
-~/.hermes/skills/web3/
-├── nft-mint/          # Core NFT lifecycle
-├── nft-fast-mint/     # Speed-optimized single mint
-├── nft-parallel-mint/ # Multi-wallet broadcast
-├── nft-stage-open-snipe/  # Timing-critical sniping
-├── nft-mint-preflight/    # Fleet health checks
-├── nft-toolkit/       # SIWE, calldata, GraphQL
-├── contract-analysis/ # Security scanning
-├── nft-wl-social-campaign/  # WL campaign automation
-├── nft-wl-submission/ # WL form submission
-├── cron-multi-rpc-fallback/ # RPC resilience
-└── evm-eip1559-fee-optimizer/ # Gas optimization
-```
+**Q: Free mint failed with IncorrectPayment — is it free?**  
+A: Simulate with `value=0`. If only paid path works, stop and ask before sending.
 
----
+**Q: OpenSea says minting but GraphQL all false?**  
+A: You’re not on signed stages; wait for public or skip.
 
-## 🔗 Related Skills
+**Q: Cron at stage time still late?**  
+A: Fire cron **early**, pre-warm, then poll for open — don’t cold-start at T0.
 
-| Skill | Purpose |
-|---|---|
-| `opensea-eligibility-checker` | SIWE + GraphQL drop eligibility |
-| `opensea-collection-check` | Holdings, rarity, pre-reveal status |
-| `seadrop-direct-mint` | Raw SeaDrop calldata mint (no API) |
-| `x-multi-account` | Multi-account X/Twitter operations |
-| `xurl` | Official X API v2 CLI |
-| `web-wl-gate` | Browser-based WL gate solving |
+**Q: Can I mint without OpenSea API key?**  
+A: Yes for many SeaDrop paths (direct calldata / on-chain). Eligibility GraphQL uses SIWE session, not always a REST key.
+
+**Q: How many wallets concurrent?**  
+A: Cap by RPC rate limits (often ~20 workers); more wallets = waves.
 
 ---
 
-## ⚠️ Common Pitfalls
+## Security notes
 
-1. **web3.py v7**: `signed.raw_transaction` (snake_case), NOT `rawTransaction`
-2. **SeaDrop `transferFrom`**: use `safeTransferFrom` with `estimateGas × 1.3`
-3. **Priority fee 0.02 gwei** → drops from mempool. Use ≥ 0.05 gwei.
-4. **Stage drift**: re-query on-chain state at T0, never trust cron schedule
-5. **Single RPC** = single point of failure. Always multi-RPC fallback.
-6. **Blockscout 403**: add `User-Agent: Mozilla/5.0` header
-7. **EIP-1167 proxy**: get bytecode first — 45 bytes = proxy, extract impl from bytes 10-29
-8. **`totalSupply >= maxSupply`** → collection fully minted, HARD STOP
-9. **Cron `no_agent=true`**: `sys.exit(1)` on 0/N success to trigger error alert
-10. **OpenSea API 429**: rotate API key (`POST /auth/keys`) or use calldata template
+- Private keys: `chmod 600`, never commit  
+- Don’t paste PKs in chat logs  
+- Scan unknown contracts before first send  
+- Respect chain ToS / project rules; automation at your own risk  
 
 ---
 
-## 🤖 Hermes Agent Integration
+## Companion (Indonesian, shorter)
 
-These skills are part of the **Hermes Agent** ecosystem. Each skill is a `SKILL.md` file that the agent loads on-demand:
-
-```
-User: "mint paralel 50 wallet ke contract ini"
-Agent: loads nft-parallel-mint → detects contract → broadcasts → reports
-```
-
-Skills are loaded via `skill_view(name)` and executed in the agent's context. They contain:
-- Full Python code patterns
-- RPC call sequences
-- Error handling recipes
-- Pitfall documentation
-- Reference implementations
+A simpler Indonesian version lives on Notion (portfolio hub):  
+→ *Notion URL filled after publish*
 
 ---
 
-## 📄 License
+## Related repos
 
-MIT — use, modify, and distribute freely.
+- [opensea-eligibility-check](https://github.com/didin-lab/opensea-eligibility-check) — SIWE + GraphQL WL checks  
+- [hermes-x-multi-account](https://github.com/didin-lab/hermes-x-multi-account) — multi-account X ops for social WL  
+
+---
+
+## License
+
+MIT (documentation). Third-party chains, OpenSea, and project contracts have their own terms.
